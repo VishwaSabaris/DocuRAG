@@ -1,0 +1,42 @@
+{
+  "dataset_name": "DocuRAG Hall Ticket Evaluation",
+  "version": "1.0",
+  "document_id": "80caef9c-30fa-4494-95b8-2ab21074fb2a",
+  "cases": [
+    {
+      "id": "case_001",
+      "question": "What is the examination date?",
+      "expected_answer": "Sunday, 20 September, 2026",
+      "expected_pages": [1],
+      "expected_behavior": "answer"
+    },
+    {
+      "id": "case_002",
+      "question": "What is the name of the examination center?",
+      "expected_answer": "Ranganathan Engineering College",
+      "expected_pages": [1],
+      "expected_behavior": "answer"
+    },
+    {
+      "id": "case_003",
+      "question": "Where is the examination center located?",
+      "expected_answer": "iON Digital Zone iDZ Thondamuthur",
+      "expected_pages": [1],
+      "expected_behavior": "answer"
+    },
+    {
+      "id": "case_004",
+      "question": "What is the capital of France?",
+      "expected_answer": "The information is not available in the provided document.",
+      "expected_pages": [],
+      "expected_behavior": "refuse"
+    },
+    {
+      "id": "case_005",
+      "question": "Who is the Prime Minister of India?",
+      "expected_answer": "The information is not available in the provided document.",
+      "expected_pages": [],
+      "expected_behavior": "refuse"
+    }
+  ]
+}

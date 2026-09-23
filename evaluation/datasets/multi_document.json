@@ -1,0 +1,178 @@
+[
+  {
+    "id": "multi_001",
+    "question": "Who is the candidate?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_answer": "Vishwa Sabaris V",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_002",
+    "question": "What is the candidate's registration number?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_answer": "NOC26CS117S353802605",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_003",
+    "question": "What is the examination center?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_answer": "iON Digital Zone iDZ Thondamuthur",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_004",
+    "question": "Who is the candidate?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_answer": "Arun Kumar S",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_005",
+    "question": "What is the candidate's registration number?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_answer": "DBMS26A10452",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_006",
+    "question": "What is the examination center?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_answer": "PSG Institute of Technology",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_007",
+    "question": "What is Vishwa Sabaris V's registration number?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_answer": "NOC26CS117S353802605",
+    "expected_behavior": "answer_contains",
+    "type": "entity_resolution",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_008",
+    "question": "What is Arun Kumar S's registration number?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_answer": "DBMS26A10452",
+    "expected_behavior": "answer_contains",
+    "type": "entity_resolution",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_009",
+    "question": "What is Vishwa Sabaris V's examination center?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_answer": "iON Digital Zone iDZ Thondamuthur",
+    "expected_behavior": "answer_contains",
+    "type": "entity_resolution",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_010",
+    "question": "What is Arun Kumar S's examination center?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_answer": "PSG Institute of Technology",
+    "expected_behavior": "answer_contains",
+    "type": "entity_resolution",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_011",
+    "question": "What is Vishwa Sabaris V's subject?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_answer": "CS117 Data Base Management System",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_012",
+    "question": "What is Arun Kumar S's subject?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_answer": "Database Management Systems",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_013",
+    "question": "What is the postal code?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_answer": "641004",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_014",
+    "question": "What is Vishwa Sabaris V's postal code?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_answer": "641109",
+    "expected_behavior": "answer_contains",
+    "type": "document_isolation",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_015",
+    "question": "Is Arun Kumar S's examination center iON Digital Zone iDZ Thondamuthur?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_answer": "No",
+    "expected_behavior": "answer_contains",
+    "type": "cross_document_contamination",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_016",
+    "question": "Is Vishwa Sabaris V's registration number DBMS26A10452?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_answer": "No",
+    "expected_behavior": "answer_contains",
+    "type": "cross_document_contamination",
+    "expected_refusal": false
+  },
+  {
+    "id": "multi_017",
+    "question": "What is Arun Kumar S's date of birth?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_behavior": "refusal",
+    "type": "unsupported",
+    "expected_refusal": true
+  },
+  {
+    "id": "multi_018",
+    "question": "What is Vishwa Sabaris V's college?",
+    "document_id": "8aedc5d9-6e1b-4d61-8c17-33553e0896f3",
+    "expected_behavior": "refusal",
+    "type": "unsupported_relation",
+    "expected_refusal": true
+  },
+  {
+    "id": "multi_019",
+    "question": "Is Arun Kumar S a student?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_behavior": "refusal",
+    "type": "unsupported_role",
+    "expected_refusal": true
+  },
+  {
+    "id": "multi_020",
+    "question": "What is the capital of France?",
+    "document_id": "b0814bab-9caa-40c4-ac7a-58f922d482e5",
+    "expected_behavior": "refusal",
+    "type": "out_of_scope",
+    "expected_refusal": true
+  }
+]

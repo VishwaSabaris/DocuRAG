@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+
+# Local databases / vector stores
+*.db
+*.sqlite
+*.sqlite3
+chroma/
+chromadb/
+vector_db/
+vectordb/
+
+# Uploaded/generated documents
+uploads/
+uploaded_files/
+generated/
+tmp/
+temp/
+
+# Secrets / keys
+*.pem
+*.key

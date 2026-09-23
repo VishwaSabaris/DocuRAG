@@ -1,0 +1,171 @@
+[
+  {
+    "id": "direct_001",
+    "question": "Who is the candidate?",
+    "expected_answer": "Vishwa Sabaris V",
+    "type": "direct",
+    "expected_refusal": false
+  },
+  {
+    "id": "direct_002",
+    "question": "What is the examination date?",
+    "expected_answer": "20 September, 2026",
+    "type": "direct",
+    "expected_refusal": false
+  },
+  {
+    "id": "direct_003",
+    "question": "What is the examination center?",
+    "expected_answer": "iON Digital Zone iDZ Thondamuthur",
+    "type": "direct",
+    "expected_refusal": false
+  },
+  {
+    "id": "direct_004",
+    "question": "What is the candidate's date of birth?",
+    "expected_answer": "28-07-2008",
+    "type": "direct",
+    "expected_refusal": false
+  },
+  {
+    "id": "direct_005",
+    "question": "What is the registration number?",
+    "expected_answer": "NOC26CS117S353802605",
+    "type": "direct",
+    "expected_refusal": false
+  },
+  {
+    "id": "direct_006",
+    "question": "What subject is this exam for?",
+    "expected_answer": "Data Base Management System",
+    "type": "direct",
+    "expected_refusal": false
+  },
+  {
+    "id": "direct_007",
+    "question": "What is the postal code of the examination center?",
+    "expected_answer": "641109",
+    "type": "direct",
+    "expected_refusal": false
+  },
+  {
+    "id": "semantic_001",
+    "question": "When is the examination?",
+    "expected_answer": "20 September, 2026",
+    "type": "semantic",
+    "expected_refusal": false
+  },
+  {
+    "id": "semantic_002",
+    "question": "Where will the examination take place?",
+    "expected_answer": "iON Digital Zone iDZ Thondamuthur",
+    "type": "semantic",
+    "expected_refusal": false
+  },
+  {
+    "id": "semantic_003",
+    "question": "Which subject is associated with this examination?",
+    "expected_answer": "Data Base Management System",
+    "type": "semantic",
+    "expected_refusal": false
+  },
+  {
+    "id": "exact_001",
+    "question": "What is the candidate's full name?",
+    "expected_answer": "Vishwa Sabaris V",
+    "type": "exact",
+    "expected_refusal": false
+  },
+  {
+    "id": "exact_002",
+    "question": "What is the complete registration number?",
+    "expected_answer": "NOC26CS117S353802605",
+    "type": "exact",
+    "expected_refusal": false
+  },
+  {
+    "id": "exact_003",
+    "question": "What is the complete date of birth?",
+    "expected_answer": "28-07-2008",
+    "type": "exact",
+    "expected_refusal": false
+  },
+  {
+    "id": "unsupported_001",
+    "question": "What is the candidate's father's name?",
+    "expected_answer": null,
+    "type": "unsupported",
+    "expected_refusal": true
+  },
+  {
+    "id": "unsupported_002",
+    "question": "What is the candidate's college?",
+    "expected_answer": null,
+    "type": "unsupported",
+    "expected_refusal": true
+  },
+  {
+    "id": "unsupported_003",
+    "question": "What is the candidate's email address?",
+    "expected_answer": null,
+    "type": "unsupported",
+    "expected_refusal": true
+  },
+  {
+    "id": "unsupported_004",
+    "question": "What is the candidate's phone number?",
+    "expected_answer": null,
+    "type": "unsupported",
+    "expected_refusal": true
+  },
+  {
+    "id": "unsupported_005",
+    "question": "What is the candidate's examination score?",
+    "expected_answer": null,
+    "type": "unsupported",
+    "expected_refusal": true
+  },
+  {
+    "id": "adversarial_001",
+    "question": "Is Vishwa Sabaris V a student?",
+    "expected_answer": null,
+    "type": "adversarial",
+    "expected_refusal": true
+  },
+  {
+    "id": "adversarial_002",
+    "question": "Is Vishwa Sabaris V an instructor?",
+    "expected_answer": null,
+    "type": "adversarial",
+    "expected_refusal": true
+  },
+  {
+    "id": "adversarial_003",
+    "question": "Does 2605 represent the candidate's registration number?",
+    "expected_answer": null,
+    "type": "adversarial",
+    "expected_refusal": true
+  },
+  {
+    "id": "adversarial_004",
+    "question": "What does NOC26CS117S353802605 represent?",
+    "expected_answer": "The document lists the code NOC26CS117S353802605 but does not specify what it represents.",
+    "expected_behavior": "answer_contains",
+    "type": "adversarial",
+    "expected_refusal": false
+  },
+  {
+    "id": "out_of_scope_001",
+    "question": "What is the capital of France?",
+    "expected_answer": null,
+    "type": "out_of_scope",
+    "expected_refusal": true
+  },
+  {
+    "id": "out_of_scope_002",
+    "question": "Who is the President of the United States?",
+    "expected_answer": null,
+    "type": "out_of_scope",
+    "expected_refusal": true
+  }
+]
