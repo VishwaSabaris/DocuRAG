@@ -10,6 +10,18 @@ from app.services.embeddings.embedding_service import (
     get_embedding_service,
 )
 
+from typing import Any
+from uuid import UUID
+
+from psycopg import Connection
+
+from app.core.config import get_settings
+from app.repositories.document_repository import DocumentRepository
+from app.services.embeddings.embedding_service import (
+    EmbeddingService,
+    get_embedding_service,
+)
+
 
 class HybridRetrievalService:
     """
@@ -47,6 +59,11 @@ class HybridRetrievalService:
     Exact-match boosting gives an additional deterministic
     ranking signal when the complete query appears inside
     the candidate chunk.
+
+    Adaptive semantic recovery is used when normal hybrid
+    retrieval produces no candidates. This allows legitimate
+    low-similarity semantic questions to reach the reranker
+    without globally lowering the normal semantic threshold.
     """
 
     RRF_K = 60
@@ -54,6 +71,13 @@ class HybridRetrievalService:
     # Additional score applied when the complete query appears
     # as a case-insensitive substring of the candidate text.
     EXACT_MATCH_BOOST = 0.10
+
+    # Recovery floor used only when normal hybrid retrieval
+    # produces no candidates.
+    #
+    # This is intentionally lower than the normal retrieval
+    # threshold but still excludes very weak semantic matches.
+    RECOVERY_MIN_SCORE = 0.08
 
     def __init__(
         self,
@@ -80,6 +104,11 @@ class HybridRetrievalService:
         if not 0.0 <= self.min_score <= 1.0:
             raise ValueError(
                 "min_score must be between 0.0 and 1.0."
+            )
+
+        if not 0.0 <= self.RECOVERY_MIN_SCORE <= 1.0:
+            raise ValueError(
+                "RECOVERY_MIN_SCORE must be between 0.0 and 1.0."
             )
 
     @classmethod
@@ -112,9 +141,6 @@ class HybridRetrievalService:
         the candidate text.
 
         Matching is case-insensitive and whitespace-normalized.
-
-        This is intentionally a simple deterministic signal.
-        It does not attempt fuzzy matching.
         """
 
         normalized_query = " ".join(
@@ -142,22 +168,29 @@ class HybridRetrievalService:
         Retrieve candidate document chunks using hybrid retrieval.
 
         Retrieval stages:
-
             1. Vector similarity search
             2. Exact keyword search
             3. PostgreSQL full-text search
             4. Reciprocal Rank Fusion
             5. Exact-match boosting
-            6. Final candidate ordering
+            6. Adaptive semantic recovery when necessary
+            7. Final candidate ordering
 
         The returned candidates are intended to be passed to
         the cross-encoder reranker.
+
+        Normal semantic retrieval uses the configured
+        minimum similarity threshold.
+
+        If normal hybrid retrieval produces no candidates,
+        low-confidence vector results are reconsidered using
+        RECOVERY_MIN_SCORE. This improves recall for questions
+        whose wording is semantically related to the document
+        but does not share literal terminology with it.
         """
 
         if not query.strip():
-            raise ValueError(
-                "Query cannot be empty."
-            )
+            raise ValueError("Query cannot be empty.")
 
         if vector_top_k <= 0:
             raise ValueError(
@@ -177,13 +210,9 @@ class HybridRetrievalService:
                 "full_text_top_k must be greater than 0."
             )
 
-        query_embedding = (
-            self.embedding_service.embed_text(query)
+        query_embedding = self.embedding_service.embed_text(
+            query
         )
-
-        # --------------------------------------------------
-        # Retrieve candidates from all retrieval strategies
-        # --------------------------------------------------
 
         vector_results = self.repository.similarity_search(
             query_embedding=query_embedding,
@@ -203,10 +232,6 @@ class HybridRetrievalService:
             document_id=document_id,
         )
 
-        # --------------------------------------------------
-        # Candidate aggregation
-        # --------------------------------------------------
-
         candidates: dict[str, dict[str, Any]] = {}
 
         def get_or_create_candidate(
@@ -221,9 +246,7 @@ class HybridRetrievalService:
                     "page_number": result["page_number"],
                     "chunk_index": result["chunk_index"],
                     "text": result["text"],
-                    "character_count": result[
-                        "character_count"
-                    ],
+                    "character_count": result["character_count"],
                     "score": 0.0,
                     "distance": None,
                     "keyword_score": 0.0,
@@ -239,7 +262,7 @@ class HybridRetrievalService:
             return candidates[chunk_id]
 
         # --------------------------------------------------
-        # Process vector results
+        # Normal vector retrieval
         # --------------------------------------------------
 
         for rank, result in enumerate(
@@ -249,8 +272,8 @@ class HybridRetrievalService:
             distance = float(result["distance"])
             similarity_score = 1.0 - distance
 
-            # Preserve the existing minimum semantic
-            # similarity filtering behavior.
+            # Preserve the normal semantic similarity
+            # filtering behavior.
             if similarity_score < self.min_score:
                 continue
 
@@ -259,18 +282,18 @@ class HybridRetrievalService:
             candidate["score"] = similarity_score
             candidate["distance"] = distance
 
-            candidate["rrf_score"] += self._rrf_score(rank)
+            candidate["rrf_score"] += self._rrf_score(
+                rank
+            )
 
             candidate["retrieval_methods"].append(
                 "vector"
             )
 
-            candidate["retrieval_ranks"][
-                "vector"
-            ] = rank
+            candidate["retrieval_ranks"]["vector"] = rank
 
         # --------------------------------------------------
-        # Process exact keyword results
+        # Exact keyword retrieval
         # --------------------------------------------------
 
         for rank, result in enumerate(
@@ -285,18 +308,18 @@ class HybridRetrievalService:
 
             candidate["keyword_score"] = keyword_score
 
-            candidate["rrf_score"] += self._rrf_score(rank)
+            candidate["rrf_score"] += self._rrf_score(
+                rank
+            )
 
             candidate["retrieval_methods"].append(
                 "keyword"
             )
 
-            candidate["retrieval_ranks"][
-                "keyword"
-            ] = rank
+            candidate["retrieval_ranks"]["keyword"] = rank
 
         # --------------------------------------------------
-        # Process PostgreSQL full-text results
+        # PostgreSQL full-text retrieval
         # --------------------------------------------------
 
         for rank, result in enumerate(
@@ -311,7 +334,9 @@ class HybridRetrievalService:
 
             candidate["lexical_score"] = lexical_score
 
-            candidate["rrf_score"] += self._rrf_score(rank)
+            candidate["rrf_score"] += self._rrf_score(
+                rank
+            )
 
             candidate["retrieval_methods"].append(
                 "full_text"
@@ -320,6 +345,59 @@ class HybridRetrievalService:
             candidate["retrieval_ranks"][
                 "full_text"
             ] = rank
+
+        # --------------------------------------------------
+        # Adaptive semantic recovery
+        # --------------------------------------------------
+        #
+        # If normal hybrid retrieval found nothing, reconsider
+        # the vector results using a lower recovery floor.
+        #
+        # This specifically handles queries such as:
+        #
+        #     "Who is the candidate?"
+        #
+        # where the document contains:
+        #
+        #     "Vishwa Sabaris V"
+        #
+        # but does not literally contain the word "candidate".
+        #
+        # Very weak unrelated queries remain excluded.
+        # --------------------------------------------------
+
+        if not candidates:
+            for rank, result in enumerate(
+                vector_results,
+                start=1,
+            ):
+                distance = float(result["distance"])
+                similarity_score = 1.0 - distance
+
+                if (
+                    similarity_score
+                    < self.RECOVERY_MIN_SCORE
+                ):
+                    continue
+
+                candidate = get_or_create_candidate(
+                    result
+                )
+
+                candidate["score"] = similarity_score
+                candidate["distance"] = distance
+
+                candidate["rrf_score"] += (
+                    self._rrf_score(rank)
+                )
+
+                candidate["retrieval_methods"].append(
+                    "vector_recovery"
+                )
+
+                candidate["retrieval_ranks"][
+                    "vector_recovery"
+                ] = rank
 
         # --------------------------------------------------
         # Remove duplicate retrieval method names

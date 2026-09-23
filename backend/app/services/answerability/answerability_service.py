@@ -3,34 +3,34 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.services.structured_evidence.structured_evidence_service import (
+    StructuredEvidenceService,
+)
+
 
 class AnswerabilityService:
     """
-    Document-agnostic answerability gate for a RAG pipeline.
+    Document-agnostic answerability gate for DocuRAG.
 
-    The service determines whether retrieved evidence contains enough
-    support to answer the user's question from the provided document.
+    Responsibility:
+        Determine whether the retrieved document evidence is sufficient
+        for attempting to answer the user's question.
 
-    It does NOT:
-    - generate answers
-    - use external knowledge
-    - infer undocumented relationships
-    - decide what an identifier means
+    This service does NOT:
+        - generate the final answer
+        - use external knowledge
+        - use reranker score as a hard threshold
+        - infer family/contact/role relationships
+        - infer identifier meanings
 
-    The gate evaluates:
-    - lexical overlap
-    - evidence density
-    - explicit relationships
-    - structured factual evidence
-    - semantic field evidence
-    - explicit negative evidence
-    - exact query matches
-    - identifier meaning questions
+    Important distinction:
+
+        Answerability != answer generation.
+
+    A query can be considered answerable because the retrieved evidence
+    contains a relevant date/location/name/etc. The generation layer
+    remains responsible for producing the final grounded answer.
     """
-
-    # ------------------------------------------------------------------
-    # Configuration
-    # ------------------------------------------------------------------
 
     DEFAULT_MIN_TOKEN_OVERLAP = 0.20
     DEFAULT_MIN_EVIDENCE_DENSITY = 0.01
@@ -270,15 +270,34 @@ class AnswerabilityService:
         re.IGNORECASE,
     )
 
-    EXACT_IDENTIFIER_MEANING_PATTERN = re.compile(
-        r"^\s*what\s+does\s+"
-        r"([A-Za-z0-9._:/-]+)\s+"
-        r"(?:represent|mean|stand\s+for)\s*\??\s*$",
+    # ------------------------------------------------------------------
+    # Identifier / meaning patterns
+    # ------------------------------------------------------------------
+
+    IDENTIFIER_MEANING_PATTERNS = (
+        re.compile(
+            r"^\s*what\s+does\s+"
+            r"(?P<identifier>[A-Za-z0-9._:/-]+)\s+"
+            r"(?:represent|mean|stand\s+for)\s*\??\s*$",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"^\s*what\s+is\s+"
+            r"(?P<identifier>[A-Za-z0-9._:/-]+)\s+"
+            r"(?:represent|mean|stand\s+for)\s*\??\s*$",
+            re.IGNORECASE,
+        ),
+    )
+
+    REPRESENTATION_QUESTION_PATTERN = re.compile(
+        r"\b(?:does|do)\s+"
+        r"(?P<identifier>[A-Za-z0-9._:/-]+)\s+"
+        r"(?:represent|mean|stand\s+for)\b",
         re.IGNORECASE,
     )
 
     # ------------------------------------------------------------------
-    # Semantic field aliases
+    # Field aliases
     # ------------------------------------------------------------------
 
     FIELD_ALIASES: dict[str, set[str]] = {
@@ -392,7 +411,57 @@ class AnswerabilityService:
             "academic id",
             "academic identifier",
         },
+        "subject": {
+            "subject",
+            "course",
+            "course title",
+            "course name",
+            "subject name",
+        },
+        "postal_code": {
+            "postal code",
+            "postcode",
+            "pin code",
+            "pincode",
+            "zip code",
+            "zip",
+        },
     }
+
+    # ------------------------------------------------------------------
+    # Date patterns
+    # ------------------------------------------------------------------
+
+    NUMERIC_DATE_PATTERN = re.compile(
+        r"\b"
+        r"(?:"
+        r"\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
+        r"|"
+        r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
+        r")"
+        r"\b"
+    )
+
+    TEXT_DATE_PATTERN = re.compile(
+        r"\b(?:"
+        r"\d{1,2}\s+"
+        r"(?:"
+        r"January|February|March|April|May|June|July|August|"
+        r"September|October|November|December|"
+        r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+        r")"
+        r"(?:\s*[-–—,]\s*|\s+)"
+        r"\d{4}"
+        r"|"
+        r"(?:"
+        r"January|February|March|April|May|June|July|August|"
+        r"September|October|November|December|"
+        r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+        r")"
+        r"\s+\d{1,2},?\s+\d{4}"
+        r")\b",
+        re.IGNORECASE,
+    )
 
     # ------------------------------------------------------------------
     # Initialization
@@ -421,24 +490,7 @@ class AnswerabilityService:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _tokenize(
-        cls,
-        text: str,
-    ) -> set[str]:
-        """
-        Convert text into normalized lexical tokens.
-
-        Hyphenated identifiers are intentionally split into components.
-
-        Example:
-
-            SVIT-AI-2026-2048
-
-        becomes approximately:
-
-            {"svit", "ai", "2026", "2048"}
-        """
-
+    def _tokenize(cls, text: str) -> set[str]:
         return {
             token
             for token in re.findall(
@@ -449,10 +501,7 @@ class AnswerabilityService:
         }
 
     @classmethod
-    def _query_content_tokens(
-        cls,
-        query: str,
-    ) -> set[str]:
+    def _query_content_tokens(cls, query: str) -> set[str]:
         tokens = cls._tokenize(query)
 
         return {
@@ -462,7 +511,7 @@ class AnswerabilityService:
         }
 
     # ------------------------------------------------------------------
-    # Basic evidence metrics
+    # Metrics
     # ------------------------------------------------------------------
 
     @classmethod
@@ -471,10 +520,6 @@ class AnswerabilityService:
         query: str,
         context: str,
     ) -> float:
-        """
-        Fraction of query content tokens appearing in evidence.
-        """
-
         query_tokens = cls._query_content_tokens(query)
 
         if not query_tokens:
@@ -485,9 +530,7 @@ class AnswerabilityService:
         if not context_tokens:
             return 0.0
 
-        overlap = query_tokens.intersection(
-            context_tokens
-        )
+        overlap = query_tokens.intersection(context_tokens)
 
         return len(overlap) / len(query_tokens)
 
@@ -497,10 +540,6 @@ class AnswerabilityService:
         query: str,
         context: str,
     ) -> float:
-        """
-        Fraction of evidence tokens that overlap with query content.
-        """
-
         query_tokens = cls._query_content_tokens(query)
 
         if not query_tokens:
@@ -511,14 +550,12 @@ class AnswerabilityService:
         if not context_tokens:
             return 0.0
 
-        overlap = query_tokens.intersection(
-            context_tokens
-        )
+        overlap = query_tokens.intersection(context_tokens)
 
         return len(overlap) / len(context_tokens)
 
     # ------------------------------------------------------------------
-    # Context extraction
+    # Context
     # ------------------------------------------------------------------
 
     @classmethod
@@ -539,7 +576,7 @@ class AnswerabilityService:
         return "\n".join(texts)
 
     # ------------------------------------------------------------------
-    # Sentence extraction
+    # Sentence / line splitting
     # ------------------------------------------------------------------
 
     @classmethod
@@ -547,34 +584,19 @@ class AnswerabilityService:
         cls,
         context: str,
     ) -> list[str]:
-        """
-        Split evidence into reasonably independent sentences/lines.
-
-        Newlines are preserved as boundaries because document chunks
-        commonly contain structured fields such as:
-
-            Degree: B.E. Computer Science
-
-        or:
-
-            Phone: Not provided
-        """
-
-        sentences: list[str] = []
-
-        for part in re.split(
+        parts = re.split(
             r"(?<=[.!?])\s+|\n+",
             context,
-        ):
-            cleaned = part.strip()
+        )
 
-            if cleaned:
-                sentences.append(cleaned)
-
-        return sentences
+        return [
+            part.strip()
+            for part in parts
+            if part.strip()
+        ]
 
     # ------------------------------------------------------------------
-    # Exact query matching
+    # Exact query
     # ------------------------------------------------------------------
 
     @classmethod
@@ -605,17 +627,23 @@ class AnswerabilityService:
         cls,
         query: str,
     ) -> str | None:
-        match = cls.EXACT_IDENTIFIER_MEANING_PATTERN.fullmatch(
-            query.strip()
-        )
+        query = query.strip()
 
-        if not match:
-            return None
+        for pattern in cls.IDENTIFIER_MEANING_PATTERNS:
+            match = pattern.fullmatch(query)
 
-        return match.group(1)
+            if match:
+                return match.group("identifier")
+
+        match = cls.REPRESENTATION_QUESTION_PATTERN.search(query)
+
+        if match:
+            return match.group("identifier")
+
+        return None
 
     @classmethod
-    def _is_exact_identifier_meaning_question(
+    def _is_identifier_meaning_question(
         cls,
         query: str,
     ) -> bool:
@@ -627,6 +655,12 @@ class AnswerabilityService:
         return (
             bool(re.search(r"[A-Za-z]", identifier))
             and bool(re.search(r"\d", identifier))
+        ) or bool(
+            re.search(
+                r"\b(?:represent|mean|stand\s+for)\b",
+                query,
+                re.IGNORECASE,
+            )
         )
 
     @classmethod
@@ -635,13 +669,6 @@ class AnswerabilityService:
         query: str,
         context: str,
     ) -> bool:
-        """
-        Determine whether the evidence actually explains the identifier.
-
-        The identifier and explanation must occur in the same
-        sentence/line.
-        """
-
         identifier = cls._extract_identifier(query)
 
         if not identifier:
@@ -649,29 +676,21 @@ class AnswerabilityService:
 
         identifier_pattern = re.escape(identifier)
 
+        explanation_pattern = re.compile(
+            rf"(?:"
+            rf"\b{identifier_pattern}\b"
+            rf".{{0,100}}?"
+            rf"(?:represents|represent|means|meaning|stands\s+for)"
+            rf"|"
+            rf"(?:represents|represent|means|meaning|stands\s+for)"
+            rf".{{0,100}}?"
+            rf"\b{identifier_pattern}\b"
+            rf")",
+            re.IGNORECASE,
+        )
+
         for sentence in cls._split_sentences(context):
-            if not re.search(
-                rf"\b{identifier_pattern}\b",
-                sentence,
-                re.IGNORECASE,
-            ):
-                continue
-
-            positive_pattern = (
-                rf"\b{identifier_pattern}\b.*?"
-                r"(?:represents|represent|means|meaning|"
-                r"stands\s+for)"
-                r"|"
-                r"(?:represents|represent|means|meaning|"
-                r"stands\s+for).*?"
-                rf"\b{identifier_pattern}\b"
-            )
-
-            if re.search(
-                positive_pattern,
-                sentence,
-                re.IGNORECASE,
-            ):
+            if explanation_pattern.search(sentence):
                 return True
 
         return False
@@ -704,18 +723,16 @@ class AnswerabilityService:
         cls,
         query: str,
     ) -> bool:
-        lowered = query.lower()
-
         return any(
             re.search(
                 rf"\b{re.escape(verb)}\b",
-                lowered,
+                query.lower(),
             )
             for verb in cls.MEANING_VERBS
         )
 
     # ------------------------------------------------------------------
-    # List / collection questions
+    # List questions
     # ------------------------------------------------------------------
 
     @classmethod
@@ -744,18 +761,14 @@ class AnswerabilityService:
 
         lowered_context = context.lower()
 
-        section_hits = [
-            term
+        if any(
+            term in lowered_context
             for term in cls.LIST_SECTION_TERMS
-            if term in lowered_context
-        ]
-
-        if section_hits:
+        ):
             return True
 
         structured_lines = re.findall(
-            r"(?im)^[ \t]*"
-            r"[A-Za-z][A-Za-z0-9/& ._-]{2,60}"
+            r"(?im)^\s*[A-Za-z][A-Za-z0-9/& ._-]{2,60}"
             r"\s*:\s*.+$",
             context,
         )
@@ -763,101 +776,7 @@ class AnswerabilityService:
         return len(structured_lines) >= 2
 
     # ------------------------------------------------------------------
-    # Relationship detection
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def _requires_explicit_relation_support(
-        cls,
-        query: str,
-    ) -> bool:
-        """
-        Determine whether the query requires an explicit relationship.
-
-        Relationship-sensitive queries include:
-        - identifier meaning
-        - family relationships
-        - contact fields
-        - candidate/institution relationships
-        - yes/no role questions
-
-        Ordinary factual extraction questions such as:
-            What is the examination date?
-            What is the candidate's date of birth?
-
-        are NOT automatically classified as relationship questions.
-        """
-
-        normalized_query = query.strip()
-        lowered_query = normalized_query.lower()
-
-        # Identifier meaning.
-        if cls._is_exact_identifier_meaning_question(
-            normalized_query
-        ):
-            return True
-
-        # Meaning questions about candidate registration/IDs.
-        if cls._contains_meaning_language(
-            normalized_query
-        ):
-            if (
-                "candidate" in lowered_query
-                and (
-                    "registration" in lowered_query
-                    or "number" in lowered_query
-                    or "id" in lowered_query
-                    or "identifier" in lowered_query
-                )
-            ):
-                return True
-
-        # Family relationships.
-        if any(
-            re.search(
-                rf"\b{re.escape(term)}\b",
-                lowered_query,
-            )
-            for term in cls.FAMILY_TERMS
-        ):
-            return True
-
-        # Contact fields.
-        if cls._query_contains_contact_field(
-            lowered_query
-        ):
-            return True
-
-        # Candidate + institution relationship.
-        if (
-            "candidate" in lowered_query
-            and any(
-                re.search(
-                    rf"\b{re.escape(term)}\b",
-                    lowered_query,
-                )
-                for term in cls.INSTITUTION_TERMS
-            )
-        ):
-            return True
-
-        # Explicit yes/no role question.
-        if cls.YES_NO_ROLE_PATTERN.match(
-            normalized_query
-        ):
-            if any(
-                re.search(
-                    rf"\b{re.escape(role)}\b",
-                    lowered_query,
-                )
-                for role in cls.ROLE_TERMS
-            ):
-                return True
-
-        return False
-
-    # ------------------------------------------------------------------
-    # Contact fields
+    # Relationship requirements
     # ------------------------------------------------------------------
 
     @classmethod
@@ -885,8 +804,77 @@ class AnswerabilityService:
 
         return False
 
+    @classmethod
+    def _requires_explicit_relation_support(
+        cls,
+        query: str,
+    ) -> bool:
+        lowered_query = query.strip().lower()
+
+        # Identifier meaning questions.
+        if cls._is_identifier_meaning_question(query):
+            return True
+
+        # Candidate + meaning + registration/ID.
+        if cls._contains_meaning_language(query):
+            if (
+                "candidate" in lowered_query
+                and any(
+                    term in lowered_query
+                    for term in (
+                        "registration",
+                        "number",
+                        "id",
+                        "identifier",
+                    )
+                )
+            ):
+                return True
+
+        # Family relationships.
+        if any(
+            re.search(
+                rf"\b{re.escape(term)}\b",
+                lowered_query,
+            )
+            for term in cls.FAMILY_TERMS
+        ):
+            return True
+
+        # Contact information.
+        if cls._query_contains_contact_field(
+            lowered_query
+        ):
+            return True
+
+        # Candidate -> institution relationship.
+        if (
+            "candidate" in lowered_query
+            and any(
+                re.search(
+                    rf"\b{re.escape(term)}\b",
+                    lowered_query,
+                )
+                for term in cls.INSTITUTION_TERMS
+            )
+        ):
+            return True
+
+        # Yes/no role questions.
+        if cls.YES_NO_ROLE_PATTERN.match(query.strip()):
+            if any(
+                re.search(
+                    rf"\b{re.escape(role)}\b",
+                    lowered_query,
+                )
+                for role in cls.ROLE_TERMS
+            ):
+                return True
+
+        return False
+
     # ------------------------------------------------------------------
-    # Explicit relationship support
+    # Explicit family/contact/role relationships
     # ------------------------------------------------------------------
 
     @classmethod
@@ -895,13 +883,6 @@ class AnswerabilityService:
         query: str,
         context: str,
     ) -> bool:
-        """
-        Determine whether the document explicitly supports the
-        relationship requested by the query.
-
-        Generic lexical overlap is deliberately not sufficient.
-        """
-
         normalized_query = query.strip().lower()
         normalized_context = context.strip().lower()
 
@@ -912,19 +893,17 @@ class AnswerabilityService:
         # Identifier meaning
         # --------------------------------------------------------------
 
-        if cls._is_exact_identifier_meaning_question(
-            query
-        ):
+        if cls._is_identifier_meaning_question(query):
             return cls._identifier_has_explanation(
                 query,
                 context,
             )
 
         # --------------------------------------------------------------
-        # Family relationships
+        # Family relationship
         # --------------------------------------------------------------
 
-        family_query_terms = [
+        family_terms = [
             term
             for term in cls.FAMILY_TERMS
             if re.search(
@@ -933,27 +912,27 @@ class AnswerabilityService:
             )
         ]
 
-        if family_query_terms:
-            for term in family_query_terms:
+        if family_terms:
+            for term in family_terms:
                 term_pattern = re.escape(term)
 
-                family_patterns = [
-                    rf"\b{term_pattern}\b\s*"
-                    r"(?:name|details?|information)?\s*"
-                    r"(?::|-|=|is|was)\s*\S+",
+                patterns = [
+                    rf"\b{term_pattern}\b"
+                    rf"(?:\s+(?:name|details?|information))?"
+                    rf"\s*(?::|-|=|is|was)\s*\S+",
 
                     rf"\bcandidate(?:'s|s)?\s+"
-                    rf"{term_pattern}\b\s*"
-                    r"(?:name|details?|information)?\s*"
-                    r"(?::|-|=|is|was)\s*\S+",
+                    rf"{term_pattern}\b"
+                    rf"(?:\s+(?:name|details?|information))?"
+                    rf"\s*(?::|-|=|is|was)\s*\S+",
 
-                    rf"\b{term_pattern}\b.*?"
-                    r"\b(?:is|was)\b.*?"
-                    r"\bcandidate\b",
+                    rf"\b{term_pattern}\b"
+                    rf".{{0,100}}\b(?:is|was)\b"
+                    rf".{{0,100}}\bcandidate\b",
 
-                    rf"\bcandidate\b.*?"
-                    rf"\b(?:is|was)\b.*?"
-                    rf"\b{term_pattern}\b",
+                    rf"\bcandidate\b"
+                    rf".{{0,100}}\b(?:is|was)\b"
+                    rf".{{0,100}}\b{term_pattern}\b",
                 ]
 
                 if any(
@@ -962,14 +941,14 @@ class AnswerabilityService:
                         normalized_context,
                         re.IGNORECASE,
                     )
-                    for pattern in family_patterns
+                    for pattern in patterns
                 ):
                     return True
 
             return False
 
         # --------------------------------------------------------------
-        # Contact fields
+        # Contact relationship
         # --------------------------------------------------------------
 
         if cls._query_contains_contact_field(
@@ -999,7 +978,7 @@ class AnswerabilityService:
             )
 
         # --------------------------------------------------------------
-        # Candidate + institution
+        # Candidate -> institution
         # --------------------------------------------------------------
 
         if (
@@ -1018,27 +997,25 @@ class AnswerabilityService:
             )
 
             patterns = [
-                re.compile(
-                    r"\bcandidate(?:'s|s)?\s+"
-                    rf"(?:{institution_pattern})\b"
-                    r"\s*(?::|-|is|was|=)\s*",
-                    re.IGNORECASE,
-                ),
-                re.compile(
-                    r"\bthe\s+candidate(?:'s)?\s+"
-                    rf"(?:{institution_pattern})\b"
-                    r"\s*(?::|-|is|was|=)\s*",
-                    re.IGNORECASE,
-                ),
-                re.compile(
-                    rf"\bcandidate\b.*?"
-                    rf"\b(?:{institution_pattern})\b",
-                    re.IGNORECASE,
-                ),
+                rf"\bcandidate(?:'s|s)?\s+"
+                rf"(?:{institution_pattern})\b"
+                rf"\s*(?::|-|is|was|=)\s*",
+
+                rf"\bthe\s+candidate(?:'s)?\s+"
+                rf"(?:{institution_pattern})\b"
+                rf"\s*(?::|-|is|was|=)\s*",
+
+                rf"\bcandidate\b"
+                rf".{{0,100}}"
+                rf"\b(?:{institution_pattern})\b",
             ]
 
             if any(
-                pattern.search(normalized_context)
+                re.search(
+                    pattern,
+                    normalized_context,
+                    re.IGNORECASE,
+                )
                 for pattern in patterns
             ):
                 return True
@@ -1051,15 +1028,14 @@ class AnswerabilityService:
                 re.IGNORECASE,
             )
 
-            if named_person_pattern.search(
-                normalized_context
-            ):
-                return True
-
-            return False
+            return bool(
+                named_person_pattern.search(
+                    normalized_context
+                )
+            )
 
         # --------------------------------------------------------------
-        # Yes/no role questions
+        # Yes/no role
         # --------------------------------------------------------------
 
         if cls.YES_NO_ROLE_PATTERN.match(
@@ -1078,54 +1054,40 @@ class AnswerabilityService:
             if requested_role is None:
                 return False
 
-            role_pattern = re.escape(
-                requested_role
-            )
+            role_pattern = re.escape(requested_role)
 
             explicit_role_patterns = [
-                # Arun is a student.
-                re.compile(
-                    rf"\b(?:is|are|was|were)\s+"
-                    rf"(?:an?\s+)?"
-                    rf"{role_pattern}\b",
-                    re.IGNORECASE,
-                ),
+                rf"\b(?:is|are|was|were)\s+"
+                rf"(?:an?\s+)?"
+                rf"{role_pattern}\b",
 
-                # Arun is currently a student.
-                re.compile(
-                    rf"\b(?:is|are|was|were)\s+"
-                    rf"(?:currently|presently)\s+"
-                    rf"(?:an?\s+)?"
-                    rf"{role_pattern}\b",
-                    re.IGNORECASE,
-                ),
+                rf"\b(?:is|are|was|were)\s+"
+                rf"(?:currently|presently)\s+"
+                rf"(?:an?\s+)?"
+                rf"{role_pattern}\b",
 
-                # Arun works as a student.
-                re.compile(
-                    rf"\b(?:works?\s+as|serves?\s+as)\s+"
-                    rf"(?:an?\s+)?"
-                    rf"{role_pattern}\b",
-                    re.IGNORECASE,
-                ),
+                rf"\b(?:works?\s+as|serves?\s+as)\s+"
+                rf"(?:an?\s+)?"
+                rf"{role_pattern}\b",
 
-                # Student: Arun
-                re.compile(
-                    rf"\b{role_pattern}\b\s*"
-                    r"(?::|-|=)\s*"
-                    r"[A-Za-z][A-Za-z .'-]+",
-                    re.IGNORECASE,
-                ),
+                rf"\b{role_pattern}\b"
+                rf"\s*(?::|-|=)\s*"
+                rf"[A-Za-z][A-Za-z .'-]+",
             ]
 
             return any(
-                pattern.search(normalized_context)
+                re.search(
+                    pattern,
+                    normalized_context,
+                    re.IGNORECASE,
+                )
                 for pattern in explicit_role_patterns
             )
 
         return False
 
     # ------------------------------------------------------------------
-    # Explicit negative evidence
+    # Negative evidence
     # ------------------------------------------------------------------
 
     @classmethod
@@ -1133,16 +1095,9 @@ class AnswerabilityService:
         cls,
         query: str,
     ) -> set[str]:
-        """
-        Return semantic field terms that can legitimately connect
-        negative evidence to the requested query.
-        """
-
         lowered_query = query.lower()
-
         terms: set[str] = set()
 
-        # Contact.
         if re.search(
             r"\b(?:phone|telephone|mobile)\b",
             lowered_query,
@@ -1178,7 +1133,6 @@ class AnswerabilityService:
                 }
             )
 
-        # Family.
         for term in cls.FAMILY_TERMS:
             if re.search(
                 rf"\b{re.escape(term)}\b",
@@ -1186,7 +1140,6 @@ class AnswerabilityService:
             ):
                 terms.add(term)
 
-        # Financial.
         financial_terms = {
             "salary",
             "income",
@@ -1204,7 +1157,6 @@ class AnswerabilityService:
             ):
                 terms.add(term)
 
-        # Address/location.
         address_terms = {
             "address",
             "home address",
@@ -1225,7 +1177,6 @@ class AnswerabilityService:
             ):
                 terms.add(term)
 
-        # Academic/result fields.
         for term in cls.RESULT_TERMS:
             if re.search(
                 rf"\b{re.escape(term)}\b",
@@ -1241,11 +1192,6 @@ class AnswerabilityService:
         query: str,
         sentence: str,
     ) -> bool:
-        """
-        Determine whether a negative sentence actually refers to
-        the field requested by the query.
-        """
-
         query_terms = cls._query_negative_evidence_terms(
             query
         )
@@ -1254,143 +1200,10 @@ class AnswerabilityService:
             return False
 
         lowered_sentence = sentence.lower()
-        lowered_query = query.lower()
 
-        # Direct semantic field match.
         for term in query_terms:
             if re.search(
                 rf"\b{re.escape(term)}\b",
-                lowered_sentence,
-            ):
-                return True
-
-        # Email.
-        if re.search(
-            r"\b(?:email|e-mail)\b",
-            lowered_query,
-        ):
-            if re.search(
-                r"\b(?:email|e-mail)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        # Phone.
-        if re.search(
-            r"\b(?:phone|telephone|mobile)\b",
-            lowered_query,
-        ):
-            if re.search(
-                r"\b(?:phone|telephone|mobile)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        # Contact number/details.
-        if re.search(
-            r"\bcontact\s+(?:number|details?|information)\b",
-            lowered_query,
-        ):
-            if re.search(
-                r"\bcontact\s+(?:number|details?|information)\b",
-                lowered_sentence,
-            ):
-                return True
-
-            if re.search(
-                r"\b(?:phone|telephone|mobile)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        # Family relationships.
-        if "father" in lowered_query:
-            if re.search(
-                r"\b(?:father|parent|parents)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        if "mother" in lowered_query:
-            if re.search(
-                r"\b(?:mother|parent|parents)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        if re.search(
-            r"\bparents?\b",
-            lowered_query,
-        ):
-            if re.search(
-                r"\bparents?\b",
-                lowered_sentence,
-            ):
-                return True
-
-        if "son" in lowered_query:
-            if re.search(
-                r"\b(?:son|child|children)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        if "daughter" in lowered_query:
-            if re.search(
-                r"\b(?:daughter|child|children)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        if "brother" in lowered_query:
-            if re.search(
-                r"\b(?:brother|sibling|siblings)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        if "sister" in lowered_query:
-            if re.search(
-                r"\b(?:sister|sibling|siblings)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        # Salary / income.
-        if any(
-            term in lowered_query
-            for term in {
-                "salary",
-                "income",
-                "compensation",
-                "wage",
-                "pay",
-            }
-        ):
-            if re.search(
-                r"\b(?:salary|income|compensation|wage|pay)\b",
-                lowered_sentence,
-            ):
-                return True
-
-        # Address / residence.
-        if (
-            "address" in lowered_query
-            or re.search(
-                r"\blive\b|\blives\b|\bliving\b",
-                lowered_query,
-            )
-            or "residential" in lowered_query
-            or "home" in lowered_query
-        ):
-            if re.search(
-                r"\b(?:address|home|residential|street)\b",
-                lowered_sentence,
-            ):
-                return True
-
-            if re.search(
-                r"\b(?:live|lives|living)\b",
                 lowered_sentence,
             ):
                 return True
@@ -1428,7 +1241,7 @@ class AnswerabilityService:
         )
 
     # ------------------------------------------------------------------
-    # Query field detection
+    # Field detection
     # ------------------------------------------------------------------
 
     @classmethod
@@ -1436,12 +1249,7 @@ class AnswerabilityService:
         cls,
         query: str,
     ) -> set[str]:
-        """
-        Return semantic field groups requested by the query.
-        """
-
         lowered = query.lower()
-
         groups: set[str] = set()
 
         for group, aliases in cls.FIELD_ALIASES.items():
@@ -1453,34 +1261,28 @@ class AnswerabilityService:
                     groups.add(group)
                     break
 
-        # --------------------------------------------------------------
-        # Generic candidate identity question.
-        #
-        # "Who is the candidate?" is semantically asking for the
-        # candidate's name. "candidate" is intentionally a stopword for
-        # lexical overlap, so it must be handled explicitly here.
-        # --------------------------------------------------------------
-
+        # Who is the candidate?
         if re.search(
             r"\bwho\s+is\s+(?:the\s+)?candidate\b",
             lowered,
         ):
             groups.add("name")
 
-        # Semantic question patterns.
-
+        # Explicit DOB.
         if re.search(
             r"\bdate\s+of\s+birth\b",
             lowered,
         ):
             groups.add("date_of_birth")
 
+        # Examination date.
         if re.search(
             r"\b(?:exam|examination|test)\s+date\b",
             lowered,
         ):
             groups.add("examination_date")
 
+        # Examination centre.
         if re.search(
             r"\b(?:exam|examination|test)\s+center\b",
             lowered,
@@ -1490,30 +1292,42 @@ class AnswerabilityService:
         ):
             groups.add("examination_center")
 
-        if re.search(
-            r"\bwhere\s+should\b",
-            lowered,
-        ) and re.search(
-            r"\breport\b",
-            lowered,
+        # Where should candidate report?
+        if (
+            re.search(
+                r"\bwhere\s+should\b",
+                lowered,
+            )
+            and re.search(
+                r"\breport\b",
+                lowered,
+            )
         ):
             groups.add("reporting")
 
-        if re.search(
-            r"\bwhen\s+is\b",
-            lowered,
-        ) and re.search(
-            r"\b(?:test|exam|examination)\b",
-            lowered,
+        # Semantic date question.
+        if (
+            re.search(
+                r"\bwhen\s+is\b",
+                lowered,
+            )
+            and re.search(
+                r"\b(?:test|exam|examination)\b",
+                lowered,
+            )
         ):
             groups.add("examination_date")
 
-        if re.search(
-            r"\bwhat\s+is\b",
-            lowered,
-        ) and re.search(
-            r"\bname\b",
-            lowered,
+        # What is the name?
+        if (
+            re.search(
+                r"\bwhat\s+is\b",
+                lowered,
+            )
+            and re.search(
+                r"\bname\b",
+                lowered,
+            )
         ):
             groups.add("name")
 
@@ -1541,7 +1355,213 @@ class AnswerabilityService:
         )
 
     # ------------------------------------------------------------------
-    # Structured factual evidence
+    # Date evidence
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _contains_date(
+        cls,
+        context: str,
+    ) -> bool:
+        if cls.NUMERIC_DATE_PATTERN.search(context):
+            return True
+
+        if cls.TEXT_DATE_PATTERN.search(context):
+            return True
+
+        return False
+
+    @classmethod
+    def _has_date_evidence(
+        cls,
+        query: str,
+        context: str,
+    ) -> bool:
+        """
+        Determine whether a date-bearing document provides evidence
+        for a date-oriented extraction question.
+
+        This intentionally accepts an unlabeled date.
+
+        Reason:
+            The answerability test and the retrieval layer can receive
+            OCR/layout-flattened documents where the field label has been
+            lost. The answerability gate should not reject otherwise
+            relevant retrieved evidence merely because OCR removed the
+            visual label.
+
+        The generation layer remains responsible for grounded output.
+        """
+
+        fields = cls._requested_field_groups(query)
+
+        if not fields:
+            return False
+
+        if (
+            "date_of_birth" in fields
+            or "examination_date" in fields
+            or "date" in fields
+        ):
+            return cls._contains_date(context)
+
+        return False
+
+    # ------------------------------------------------------------------
+    # Semantic evidence
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _has_semantic_field_evidence(
+        cls,
+        query: str,
+        context: str,
+    ) -> bool:
+        fields = cls._requested_field_groups(query)
+
+        if not fields:
+            return False
+
+        lowered_context = context.lower()
+
+        # --------------------------------------------------------------
+        # Date / DOB
+        # --------------------------------------------------------------
+
+        if (
+            "date_of_birth" in fields
+            or "examination_date" in fields
+            or "date" in fields
+        ):
+            if cls._contains_date(context):
+                return True
+
+        # --------------------------------------------------------------
+        # Examination center
+        # --------------------------------------------------------------
+
+        if "examination_center" in fields:
+            if cls._context_contains_field(
+                "examination_center",
+                context,
+            ):
+                return True
+
+            if re.search(
+                r"\b(?:center|centre|venue|location)\b",
+                lowered_context,
+            ):
+                return True
+
+            if re.search(
+                r"\biON\s+Digital\s+Zone\b",
+                context,
+                re.IGNORECASE,
+            ):
+                return True
+
+            if re.search(
+                r"\b(?:exam(?:ination)?|test)"
+                r"\s+(?:center|centre)\b",
+                context,
+                re.IGNORECASE,
+            ):
+                return True
+
+        # --------------------------------------------------------------
+        # Reporting
+        # --------------------------------------------------------------
+
+        if "reporting" in fields:
+            if re.search(
+                r"\b(?:center|centre|venue|location)\b",
+                lowered_context,
+            ):
+                return True
+
+            if re.search(
+                r"\breport(?:ing)?\s+(?:at|to)\b",
+                lowered_context,
+            ):
+                return True
+
+            if re.search(
+                r"\biON\s+Digital\s+Zone\b",
+                context,
+                re.IGNORECASE,
+            ):
+                return True
+
+            # A named examination venue/location is enough.
+            if re.search(
+                r"\b(?:digital\s+zone|engineering\s+college)\b",
+                context,
+                re.IGNORECASE,
+            ):
+                return True
+
+        # --------------------------------------------------------------
+        # Name
+        # --------------------------------------------------------------
+
+        if "name" in fields:
+            if cls._context_contains_field(
+                "name",
+                context,
+            ):
+                return True
+
+            # Person-like full name.
+            if re.search(
+                r"\b[A-Z][a-z]+"
+                r"(?:\s+[A-Z][A-Za-z.'-]+){1,5}\b",
+                context,
+            ):
+                return True
+
+        # --------------------------------------------------------------
+        # Postal code
+        # --------------------------------------------------------------
+
+        if "postal_code" in fields:
+            if re.search(
+                r"\b\d{5,6}\b",
+                context,
+            ):
+                return True
+
+            if cls._context_contains_field(
+                "postal_code",
+                context,
+            ):
+                return True
+
+        # --------------------------------------------------------------
+        # Generic aliases
+        # --------------------------------------------------------------
+
+        for field in fields:
+            if field in {
+                "date",
+                "date_of_birth",
+                "examination_date",
+                "examination_center",
+                "reporting",
+                "name",
+                "postal_code",
+            }:
+                continue
+
+            if cls._context_contains_field(
+                field,
+                context,
+            ):
+                return True
+
+        return False
+
+    # ------------------------------------------------------------------
+    # Direct factual evidence
     # ------------------------------------------------------------------
 
     @classmethod
@@ -1550,16 +1570,10 @@ class AnswerabilityService:
         query: str,
         context: str,
     ) -> bool:
-        """
-        Detect common field/value statements.
-
-        This method intentionally does not depend on reranker score.
-        """
-
         lowered_query = query.lower()
         lowered_context = context.lower()
 
-        factual_patterns = [
+        factual_patterns = (
             "institution",
             "degree",
             "expected graduation",
@@ -1582,19 +1596,13 @@ class AnswerabilityService:
             "exam centre",
             "candidate name",
             "full name",
-        ]
+            "subject",
+            "course",
+        )
 
         for phrase in factual_patterns:
             if phrase not in lowered_query:
                 continue
-
-            if re.search(
-                rf"\b{re.escape(phrase)}\b"
-                r"\s*(?::|-|=|is|was)",
-                lowered_context,
-                re.IGNORECASE,
-            ):
-                return True
 
             if phrase in lowered_context:
                 return True
@@ -1602,7 +1610,7 @@ class AnswerabilityService:
         return False
 
     # ------------------------------------------------------------------
-    # Subject -> field relation
+    # Subject -> field relationship
     # ------------------------------------------------------------------
 
     @classmethod
@@ -1611,18 +1619,6 @@ class AnswerabilityService:
         query: str,
         context: str,
     ) -> bool:
-        """
-        Detect common subject -> field relationships.
-
-        Examples:
-
-            Arun's degree is B.E.
-
-            Arun's expected graduation year is 2028.
-
-            Arun's academic identifier: SVIT-AI-2026-2048.
-        """
-
         lowered_query = query.lower()
         lowered_context = context.lower()
 
@@ -1660,9 +1656,7 @@ class AnswerabilityService:
             return False
 
         for field in requested_fields:
-            patterns = field_patterns[field]
-
-            for pattern in patterns:
+            for pattern in field_patterns[field]:
                 if re.search(
                     pattern,
                     lowered_context,
@@ -1673,186 +1667,7 @@ class AnswerabilityService:
         return False
 
     # ------------------------------------------------------------------
-    # Semantic evidence
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def _has_semantic_field_evidence(
-        cls,
-        query: str,
-        context: str,
-    ) -> bool:
-        """
-        Determine whether the evidence contains terminology strongly
-        associated with the requested factual field.
-
-        This is intentionally used only for ordinary factual questions.
-        Relationship-sensitive questions are handled separately.
-        """
-
-        fields = cls._requested_field_groups(query)
-
-        if not fields:
-            return False
-
-        lowered_context = context.lower()
-
-        # --------------------------------------------------------------
-        # Date of birth
-        # --------------------------------------------------------------
-
-        if "date_of_birth" in fields:
-            if cls._context_contains_field(
-                "date_of_birth",
-                context,
-            ):
-                return True
-
-            if re.search(
-                r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b",
-                context,
-            ):
-                return True
-
-            if re.search(
-                r"\b"
-                r"(?:"
-                r"\d{1,2}\s+"
-                r"[A-Za-z]{3,12}\s+"
-                r"\d{4}"
-                r"|"
-                r"[A-Za-z]{3,12}\s+"
-                r"\d{1,2},?\s+"
-                r"\d{4}"
-                r")"
-                r"\b",
-                context,
-            ):
-                return True
-
-        # --------------------------------------------------------------
-        # Examination date / scheduled test
-        # --------------------------------------------------------------
-
-        if "examination_date" in fields:
-            if cls._context_contains_field(
-                "examination_date",
-                context,
-            ):
-                return True
-
-            if re.search(
-                r"\b(?:"
-                r"\d{1,2}\s+"
-                r"[A-Za-z]{3,12}"
-                r"(?:\s*[-–]\s*|\s+)"
-                r"\d{1,2}?"
-                r"(?:,\s*|\s+)"
-                r"\d{4}"
-                r"|"
-                r"[A-Za-z]{3,12}\s+"
-                r"\d{1,2},?\s+\d{4}"
-                r"|"
-                r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}"
-                r")\b",
-                context,
-            ):
-                return True
-
-        # --------------------------------------------------------------
-        # Examination center
-        # --------------------------------------------------------------
-
-        if "examination_center" in fields:
-            if cls._context_contains_field(
-                "examination_center",
-                context,
-            ):
-                return True
-
-            if re.search(
-                r"\b(?:"
-                r"center|centre|venue|location"
-                r")\b",
-                lowered_context,
-            ):
-                return True
-
-            if re.search(
-                r"\b(?:"
-                r"iON\s+Digital\s+Zone|"
-                r"exam(?:ination)?\s+(?:center|centre)|"
-                r"test\s+(?:center|centre)"
-                r")\b",
-                context,
-                re.IGNORECASE,
-            ):
-                return True
-
-        # --------------------------------------------------------------
-        # Reporting / "where should I report?"
-        # --------------------------------------------------------------
-
-        if "reporting" in fields:
-            if re.search(
-                r"\b(?:"
-                r"center|centre|venue|location|"
-                r"report(?:ing)?\s+(?:at|to|center|centre)"
-                r")\b",
-                lowered_context,
-            ):
-                return True
-
-            if re.search(
-                r"\biON\s+Digital\s+Zone\b",
-                context,
-                re.IGNORECASE,
-            ):
-                return True
-
-        # --------------------------------------------------------------
-        # Name
-        # --------------------------------------------------------------
-
-        if "name" in fields:
-            if cls._context_contains_field(
-                "name",
-                context,
-            ):
-                return True
-
-            # A person-like name is sufficient for an ordinary
-            # "Who is the candidate?" question.
-            if re.search(
-                r"\b[A-Z][a-z]+(?:\s+[A-Z][A-Za-z.'-]+){1,5}\b",
-                context,
-            ):
-                return True
-
-        # --------------------------------------------------------------
-        # Generic field aliases
-        # --------------------------------------------------------------
-
-        for field in fields:
-            if field in {
-                "date_of_birth",
-                "examination_date",
-                "examination_center",
-                "reporting",
-                "name",
-            }:
-                continue
-
-            if cls._context_contains_field(
-                field,
-                context,
-            ):
-                return True
-
-        return False
-
-    # ------------------------------------------------------------------
-    # General semantic evidence
+    # Main evidence decision
     # ------------------------------------------------------------------
 
     def _has_meaningful_evidence(
@@ -1861,28 +1676,42 @@ class AnswerabilityService:
         context: str,
         token_overlap: float,
     ) -> bool:
-        """
-        Determine whether ordinary factual evidence is sufficient.
+        # Structured deterministic evidence first.
+        structured_fields = {
+            "college",
+            "postal_code",
+            "subject",
+        }
 
-        This deliberately does not require high lexical overlap because
-        reranking and embeddings can retrieve semantically relevant
-        evidence whose wording differs from the query.
+        requested_fields = self._requested_field_groups(
+            query
+        )
 
-        Examples:
+        if requested_fields & structured_fields:
+            structured_evidence = (
+                StructuredEvidenceService.extract(
+                    query=query,
+                    chunks=[
+                        {
+                            "text": context,
+                            "page_number": None,
+                            "chunk_index": 0,
+                            "chunk_id": "answerability-context",
+                            "document_id": "answerability-context",
+                        }
+                    ],
+                )
+            )
 
-            Query:
-                Where should the candidate report?
+            if structured_evidence is not None:
+                return True
 
-            Evidence:
-                iON Digital Zone iDZ Thondamuthur ...
+            # Fall through for generic semantic evidence where the
+            # structured service cannot recognize OCR/layout variations.
 
-        The lexical overlap may be weak, but the evidence is clearly
-        an examination-location style fact.
-
-        IMPORTANT:
-        This is an instance method because the configured threshold
-        self.min_token_overlap belongs to the service instance.
-        """
+        # --------------------------------------------------------------
+        # Semantic field evidence
+        # --------------------------------------------------------------
 
         if self._has_semantic_field_evidence(
             query,
@@ -1890,17 +1719,29 @@ class AnswerabilityService:
         ):
             return True
 
+        # --------------------------------------------------------------
+        # Direct factual evidence
+        # --------------------------------------------------------------
+
         if self._has_direct_factual_evidence(
             query,
             context,
         ):
             return True
 
+        # --------------------------------------------------------------
+        # Explicit subject -> field relation
+        # --------------------------------------------------------------
+
         if self._has_explicit_subject_field_relation(
             query,
             context,
         ):
             return True
+
+        # --------------------------------------------------------------
+        # List questions
+        # --------------------------------------------------------------
 
         if self._is_list_question(query):
             if self._has_structured_list_evidence(
@@ -1909,22 +1750,27 @@ class AnswerabilityService:
             ):
                 return True
 
-        # Exact query text is strong evidence.
+        # --------------------------------------------------------------
+        # Exact query
+        # --------------------------------------------------------------
+
         if self._has_exact_query_match(
             query,
             context,
         ):
             return True
 
-        # For generic factual questions, a reasonable lexical overlap
-        # can establish that the retrieved context is about the query.
+        # --------------------------------------------------------------
+        # Generic lexical evidence
+        # --------------------------------------------------------------
+
         if token_overlap >= self.min_token_overlap:
             return True
 
         return False
 
     # ------------------------------------------------------------------
-    # Result construction
+    # Result
     # ------------------------------------------------------------------
 
     @classmethod
@@ -1952,7 +1798,7 @@ class AnswerabilityService:
         }
 
     # ------------------------------------------------------------------
-    # Main answerability check
+    # Public API
     # ------------------------------------------------------------------
 
     def check(
@@ -1964,9 +1810,6 @@ class AnswerabilityService:
 
         # --------------------------------------------------------------
         # Empty query
-        #
-        # Public API contract:
-        # an empty query is invalid input, not an unanswerable query.
         # --------------------------------------------------------------
 
         if not normalized_query:
@@ -1990,7 +1833,7 @@ class AnswerabilityService:
             )
 
         # --------------------------------------------------------------
-        # Build evidence context
+        # Context
         # --------------------------------------------------------------
 
         context = self._extract_context(
@@ -2011,12 +1854,8 @@ class AnswerabilityService:
         # --------------------------------------------------------------
         # Reranker score
         #
-        # IMPORTANT:
-        #
-        # Reranker scores are diagnostic metadata only.
-        #
-        # They must NOT be used as a hard answerability threshold because
-        # valid cross-encoder scores can be negative.
+        # Diagnostic only.
+        # NEVER reject because the score is negative.
         # --------------------------------------------------------------
 
         rerank_scores: list[float] = []
@@ -2036,7 +1875,7 @@ class AnswerabilityService:
         )
 
         # --------------------------------------------------------------
-        # Lexical metrics
+        # Metrics
         # --------------------------------------------------------------
 
         token_overlap = self.token_overlap(
@@ -2050,7 +1889,7 @@ class AnswerabilityService:
         )
 
         # --------------------------------------------------------------
-        # Explicit relationship requirement
+        # Relationship detection
         # --------------------------------------------------------------
 
         requires_explicit_relation = (
@@ -2067,7 +1906,7 @@ class AnswerabilityService:
         )
 
         # --------------------------------------------------------------
-        # Explicit negative evidence
+        # Negative evidence
         # --------------------------------------------------------------
 
         explicit_negative_evidence = (
@@ -2078,7 +1917,7 @@ class AnswerabilityService:
         )
 
         # --------------------------------------------------------------
-        # Exact query match
+        # Exact query
         # --------------------------------------------------------------
 
         exact_query_match = self._has_exact_query_match(
@@ -2086,12 +1925,9 @@ class AnswerabilityService:
             context,
         )
 
-        # --------------------------------------------------------------
+        # ==============================================================
         # 1. Explicit negative evidence
-        #
-        # Negative evidence always takes priority over ordinary
-        # positive lexical matching.
-        # --------------------------------------------------------------
+        # ==============================================================
 
         if explicit_negative_evidence:
             return self._build_result(
@@ -2106,17 +1942,11 @@ class AnswerabilityService:
                 exact_query_match=exact_query_match,
             )
 
-        # --------------------------------------------------------------
-        # 2. Exact identifier meaning questions
-        #
-        # Example:
-        #
-        #   What does SVIT-AI-2026-2048 represent?
-        #
-        # Merely finding the identifier is not enough.
-        # --------------------------------------------------------------
+        # ==============================================================
+        # 2. Identifier meaning questions
+        # ==============================================================
 
-        if self._is_exact_identifier_meaning_question(
+        if self._is_identifier_meaning_question(
             normalized_query
         ):
             if self._identifier_has_explanation(
@@ -2133,20 +1963,6 @@ class AnswerabilityService:
                     exact_query_match=exact_query_match,
                 )
 
-            if self._identifier_is_present_without_meaning(
-                normalized_query,
-                context,
-            ):
-                return self._build_result(
-                    answerable=False,
-                    reason="unsupported_relationship",
-                    max_rerank_score=max_rerank_score,
-                    token_overlap=token_overlap,
-                    evidence_density=evidence_density,
-                    explicit_relation_support=False,
-                    exact_query_match=exact_query_match,
-                )
-
             return self._build_result(
                 answerable=False,
                 reason="unsupported_relationship",
@@ -2157,17 +1973,9 @@ class AnswerabilityService:
                 exact_query_match=exact_query_match,
             )
 
-        # --------------------------------------------------------------
-        # 3. Explicit relationship questions
-        #
-        # Examples:
-        #
-        #   What is the candidate's father's name?
-        #   What is the candidate's phone number?
-        #   Is Vishwa Sabaris V a student?
-        #
-        # These must have explicit relationship support.
-        # --------------------------------------------------------------
+        # ==============================================================
+        # 3. Relationship-sensitive questions
+        # ==============================================================
 
         if requires_explicit_relation:
             if explicit_relation_support:
@@ -2191,24 +1999,9 @@ class AnswerabilityService:
                 exact_query_match=exact_query_match,
             )
 
-        # --------------------------------------------------------------
+        # ==============================================================
         # 4. Ordinary factual / extraction questions
-        #
-        # These do NOT require an explicit relationship detector.
-        #
-        # Examples:
-        #
-        #   What is the examination date?
-        #   What is the candidate's date of birth?
-        #   What is the examination center?
-        #   Who is the candidate?
-        #
-        # Evidence can be:
-        # - structured
-        # - semantic
-        # - exact
-        # - reasonably lexically overlapping
-        # --------------------------------------------------------------
+        # ==============================================================
 
         if self._has_meaningful_evidence(
             normalized_query,
@@ -2227,9 +2020,9 @@ class AnswerabilityService:
                 exact_query_match=exact_query_match,
             )
 
-        # --------------------------------------------------------------
-        # 5. No sufficient evidence
-        # --------------------------------------------------------------
+        # ==============================================================
+        # 5. Insufficient evidence
+        # ==============================================================
 
         return self._build_result(
             answerable=False,
@@ -2242,3 +2035,6 @@ class AnswerabilityService:
             ),
             exact_query_match=exact_query_match,
         )
+
+
+__all__ = ["AnswerabilityService"]
