@@ -10,10 +10,15 @@ const SETTINGS_STORAGE_KEY = "docurag.settings.v1";
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: "dark",
-  apiBaseUrl: "http://localhost:8000",
+  apiBaseUrl:
+    import.meta.env.VITE_API_BASE_URL ??
+    "http://localhost:8000",
 };
 
-function safelyParse<T>(value: string | null, fallback: T): T {
+function safelyParse<T>(
+  value: string | null,
+  fallback: T,
+): T {
   if (!value) {
     return fallback;
   }
@@ -32,7 +37,9 @@ export function loadChats(): ChatSession[] {
   );
 }
 
-export function saveChats(chats: ChatSession[]): void {
+export function saveChats(
+  chats: ChatSession[],
+): void {
   localStorage.setItem(
     CHAT_STORAGE_KEY,
     JSON.stringify(chats),
@@ -71,7 +78,9 @@ export function saveSettings(
   );
 }
 
-export function createId(prefix = "id"): string {
+export function createId(
+  prefix = "id",
+): string {
   return `${prefix}_${Date.now()}_${Math.random()
     .toString(36)
     .slice(2, 10)}`;
@@ -101,13 +110,16 @@ export function updateChat(
     (item) => item.id === chat.id,
   )
     ? chats.map((item) =>
-        item.id === chat.id ? chat : item,
+        item.id === chat.id
+          ? chat
+          : item,
       )
     : [chat, ...chats];
 
   saveChats(
     updated.sort(
-      (a, b) => b.updatedAt - a.updatedAt,
+      (a, b) =>
+        b.updatedAt - a.updatedAt,
     ),
   );
 }
@@ -126,15 +138,17 @@ export function renameChat(
   chatId: string,
   title: string,
 ): void {
-  const chats = loadChats().map((chat) =>
-    chat.id === chatId
-      ? {
-          ...chat,
-          title:
-            title.trim() || "New conversation",
-          updatedAt: Date.now(),
-        }
-      : chat,
+  const chats = loadChats().map(
+    (chat) =>
+      chat.id === chatId
+        ? {
+            ...chat,
+            title:
+              title.trim() ||
+              "New conversation",
+            updatedAt: Date.now(),
+          }
+        : chat,
   );
 
   saveChats(chats);
@@ -159,7 +173,8 @@ export function upsertDocument(
 
   saveDocuments(
     next.sort(
-      (a, b) => b.uploadedAt - a.uploadedAt,
+      (a, b) =>
+        b.uploadedAt - a.uploadedAt,
     ),
   );
 }
